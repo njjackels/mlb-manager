@@ -148,11 +148,11 @@ function setRosterAssignment(p,value){
 function isInjuredCoverage(p){return ['INJ','CVG'].includes(assignmentStatus(p))}
 function playerHighlights(p){
   const h=Array.isArray(p.highlights)?p.highlights:[];
-  return ['injured','mlb-level','top-100'].filter(x=>h.includes(x));
+  return ['injured','mlb-level','top-100','team-top-10','40-man'].filter(x=>h.includes(x));
 }
 function highlightRowClass(p){const h=playerHighlights(p);return h.length?' player-highlight '+h.map(x=>'highlight-'+x).join(' '):''}
-function highlightBadges(p){const h=playerHighlights(p),labels={'injured':'Injured','mlb-level':'MLB Level','top-100':'Top 100'};return h.length?`<div class="player-highlight-badges">${h.map(x=>`<span class="highlight-badge ${x}">${labels[x]}</span>`).join('')}</div>`:''}
-function setPlayerHighlights(p,values){p.highlights=['injured','mlb-level','top-100'].filter(x=>values.includes(x))}
+function highlightBadges(p){const h=playerHighlights(p),labels={'injured':'Injured','mlb-level':'MLB','top-100':'Top 100','team-top-10':'Team Top 10','40-man':'40-man'};return h.length?`<div class="player-highlight-badges">${h.map(x=>`<span class="highlight-badge ${x}">${labels[x]}</span>`).join('')}</div>`:''}
+function setPlayerHighlights(p,values){p.highlights=['injured','mlb-level','top-100','team-top-10','40-man'].filter(x=>values.includes(x))}
 function nav(){
   const pages=D.sheetOrder.filter(x=>x!=='Partial Contract Coverage');
   const labels={
@@ -189,7 +189,7 @@ function coverPage(){
   const val=(r,c)=>m[r]?.[c]??'';
   const metric=(label,value,isMoney=false)=>`<div class="cover-metric"><span>${esc(label)}</span><strong>${isMoney?money(value):esc(value)}</strong></div>`;
   const section=(title,subtitle,items,cls='')=>`<section class="cover-section ${cls}"><div class="cover-section-head"><div><h3>${esc(title)}</h3>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div></div><div class="cover-metrics">${items.join('')}</div></section>`;
-  const links=Object.entries(coverLinks).filter(([name])=>name!=='TapaTalk').map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
+  const links=Object.entries(coverLinks).map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
   const search=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><input id="coverPlayerSearch" class="cover-player-search" list="coverPlayerList" placeholder="Enter player name"><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button><datalist id="coverPlayerList">${state.players.filter(p=>p.active!==false).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></div></section>`;
   return `<div class="cover-page">
     <div class="cover-title"><p>Major League Roster</p><h2>${esc(val(1,1)||'NEW JERSEY JACKELS')}</h2></div>
@@ -264,14 +264,9 @@ function mlbRosterPage(){
   const capPlayers=state.players.filter(p=>p.active!==false&&(p.roster==='MLB'||isInjuredCoverage(p)));
   const capUsed=capPlayers.reduce((sum,p)=>sum+(Number(p.mlbSalary)||0),0);
   const rosterLimit=Number(val(8,22))||26;
-  const activeCount=activeAll.length, injuredCount=allMlb.filter(isMlbInjuredCoverage).length;
+  const activeCount=activeAll.length;
   const freeSpace=(Number(D.cap)||Number(val(6,22))||0)-capUsed;
-  const minorPositionTotals={'Infielders':0,'Outfielders':0,'Starting Pitchers':0,'Relief Pitchers':0};
-  for(const [pageName,cfg] of Object.entries(MINOR_PAGE_CONFIG)){
-    const counts=minorCounts(cfg.level,cfg.sheet);
-    for(const group of Object.keys(minorPositionTotals))minorPositionTotals[group]+=counts[group]||0;
-  }
-  const side=`<aside class="roster-info-sidebar"><section class="roster-info-card"><h3>Roster Information</h3><div class="info-line"><span>Cap</span><strong>${money(capUsed)} of ${money(D.cap||val(6,22))}</strong></div><div class="info-line"><span>Free Space</span><strong>${money(freeSpace)}</strong></div><div class="info-line"><span>Players</span><strong>${activeCount} of ${rosterLimit}</strong></div><div class="info-line"><span>Injured/Coverage</span><strong>${injuredCount}</strong></div></section><section class="roster-info-card"><h3>Minor League Position Breakdown</h3>${Object.entries(minorPositionTotals).map(([group,count])=>`<div class="info-line"><span>${group}</span><strong>${count}</strong></div>`).join('')}</section></aside>`;
+  const side=`<aside class="roster-info-sidebar"><section class="roster-info-card"><h3>Roster Information</h3><div class="info-line"><span>Cap</span><strong>${money(capUsed)} of ${money(D.cap||val(6,22))}</strong></div><div class="info-line"><span>Free Space</span><strong>${money(freeSpace)}</strong></div><div class="info-line"><span>Players</span><strong>${activeCount} of ${rosterLimit}</strong></div></section></aside>`;
   return `<div class="roster-web-page">${toolbar()}<div class="roster-page-head"><div><h2>Major League Roster</h2><p>New Jersey Jackels</p></div><strong>${allMlb.length} listed players</strong></div><div class="roster-layout"><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Slot</th><th>Photo</th><th>Player</th><th>Position</th><th>Age</th><th>Eligible Positions</th><th>Team</th><th>Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${slotRows}${injuredRows?`<tr class="section-row injury-section-row"><td colspan="14">Injured (${injured.length})</td></tr>${injuredRows}`:''}${coverageRows?`<tr class="section-row coverage-section-row"><td colspan="14">Coverage (${coverage.length})</td></tr>${coverageRows}`:''}</tbody></table></div>${side}</div></div>`;
 }
 
@@ -348,11 +343,15 @@ window.openPlayerDetails=id=>{
   $('#detailHighlightInjured').checked=highlights.includes('injured');
   $('#detailHighlightMlbLevel').checked=highlights.includes('mlb-level');
   $('#detailHighlightTop100').checked=highlights.includes('top-100');
+  $('#detailHighlightTeamTop10').checked=highlights.includes('team-top-10');
+  $('#detailHighlight40Man').checked=highlights.includes('40-man');
   $('#detailSaveHighlights').onclick=()=>{
     const values=[];
     if($('#detailHighlightInjured').checked)values.push('injured');
     if($('#detailHighlightMlbLevel').checked)values.push('mlb-level');
     if($('#detailHighlightTop100').checked)values.push('top-100');
+    if($('#detailHighlightTeamTop10').checked)values.push('team-top-10');
+    if($('#detailHighlight40Man').checked)values.push('40-man');
     setPlayerHighlights(p,values);log('Highlights Updated',p,values.length?values.join(', '):'Cleared');save();d.close();render();
   };
   const link=$('#detailSavant');
@@ -415,6 +414,8 @@ function populateDatabaseForm(p){
   if(f.elements.highlightInjured)f.elements.highlightInjured.checked=h.includes('injured');
   if(f.elements.highlightMlbLevel)f.elements.highlightMlbLevel.checked=h.includes('mlb-level');
   if(f.elements.highlightTop100)f.elements.highlightTop100.checked=h.includes('top-100');
+  if(f.elements.highlightTeamTop10)f.elements.highlightTeamTop10.checked=h.includes('team-top-10');
+  if(f.elements.highlight40Man)f.elements.highlight40Man.checked=h.includes('40-man');
 }
 window.editDatabasePlayer=id=>{const p=state.players.find(x=>x.id===id);if(!p)return;populateDatabaseForm(p);$('#playerTitle').textContent='Edit Player Key';$('#playerDialog').showModal()};
 window.editPlayer=window.editDatabasePlayer;
@@ -438,10 +439,10 @@ $('#playerForm').onsubmit=e=>{
   if(Number.isNaN(mlbSalary)||Number.isNaN(minorSalary)){alert('Enter a valid salary, such as 3250000 or $3,250,000.');return}
   Object.assign(p,fd,{mlbSalary,minorSalary});
   setRosterAssignment(p,rosterChoice);
-  const chosenHighlights=[fd.highlightInjured?'injured':'',fd.highlightMlbLevel?'mlb-level':'',fd.highlightTop100?'top-100':''].filter(Boolean);
+  const chosenHighlights=[fd.highlightInjured?'injured':'',fd.highlightMlbLevel?'mlb-level':'',fd.highlightTop100?'top-100':'',fd.highlightTeamTop10?'team-top-10':'',fd.highlight40Man?'40-man':''].filter(Boolean);
   if(assignmentStatus(p)==='INJ'&&!chosenHighlights.includes('injured'))chosenHighlights.push('injured');
   setPlayerHighlights(p,chosenHighlights);
-  delete p.highlightInjured;delete p.highlightMlbLevel;delete p.highlightTop100;
+  delete p.highlightInjured;delete p.highlightMlbLevel;delete p.highlightTop100;delete p.highlightTeamTop10;delete p.highlight40Man;
   if(creating&&fd.mlbId&&!state.players.some(x=>x!==p&&x.id===fd.mlbId))p.id=fd.mlbId;
   if(!p.roster)p.roster='Unassigned';
   log(creating?'Player Key Added':'Player Key Updated',p,creating?'Added to master database':'Player information updated');
@@ -636,18 +637,25 @@ function liveMlbMetrics(){
   const capPlayers=state.players.filter(p=>p.active!==false&&(p.roster==='MLB'||isInjuredCoverage(p)));
   const used=capPlayers.reduce((sum,p)=>sum+(Number(p.mlbSalary)||0),0);
   const activePlayers=currentPlayers.filter(p=>!isMlbInjuredCoverage(p));
-  const injuredPlayers=state.players.filter(p=>p.active!==false&&isInjuredCoverage(p));
-  return {used,limit:Number(D.cap)||116250000,count:activePlayers.length,rosterLimit:26,injured:injuredPlayers.length};
+  const injured=state.players.filter(p=>p.active!==false&&assignmentStatus(p)==='INJ').length;
+  const coverage=state.players.filter(p=>p.active!==false&&assignmentStatus(p)==='CVG').length;
+  return {used,limit:Number(D.cap)||116250000,count:activePlayers.length,rosterLimit:26,injured,coverage};
 }
 function goToPage(name){current=name;render()}
 coverPage=function(){
   const mlb=liveMlbMetrics(),minorTotal=MINOR_LEVELS.reduce((s,l)=>s+minorSalaryTotal(l),0),minorCount=MINOR_LEVELS.reduce((s,l)=>s+activeMinorAt(l).length,0);
   const metric=(label,value,isMoney=false)=>`<div class="cover-metric"><span>${esc(label)}</span><strong>${isMoney?money(value):esc(value)}</strong></div>`;
   const section=(title,subtitle,items,cls='',page='')=>`<section class="cover-section ${cls} ${page?'clickable-cover-section':''}" ${page?`onclick="goToPage('${page}')" title="Open ${esc(title)}"`:''}><div class="cover-section-head"><div><h3>${esc(title)}</h3>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div>${page?'<b class="cover-open-label">Open</b>':''}</div><div class="cover-metrics">${items.join('')}</div></section>`;
-  const links=Object.entries(coverLinks).filter(([name])=>name!=='TapaTalk').map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
+  const links=Object.entries(coverLinks).map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
   const searchBox=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><input id="coverPlayerSearch" class="cover-player-search" list="coverPlayerList" placeholder="Enter player name"><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button><datalist id="coverPlayerList">${state.players.filter(p=>p.active!==false).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></div></section>`;
   const minorSection=(level,page,title,team)=>section(title,team,[metric(`${level} Salary Total`,minorSalaryTotal(level),true),metric(`${level} Roster Limit`,MINOR_ROSTER_LIMIT),metric(`${level} Current Roster`,activeMinorAt(level).length),metric(`${level} Injured/Coverage`,activeAt(level).filter(isInjuredCoverage).length),metric(`${level} Spots Open`,Math.max(0,MINOR_ROSTER_LIMIT-activeMinorAt(level).length))],'',page);
-  return `<div class="cover-page"><div class="cover-title"><p>Major League Roster</p><h2>NEW JERSEY JACKELS</h2></div><div class="cover-dashboard-grid"><div class="cover-main-column">${section('Major League Roster','New Jersey Jackels',[metric('MLB Cap Limit',mlb.limit,true),metric('MLB Current Cap',mlb.used,true),metric('MLB Balance Available',mlb.limit-mlb.used,true),metric('MLB Roster Limit',mlb.rosterLimit),metric('MLB Current Roster',mlb.count),metric('MLB Spots Open',Math.max(0,mlb.rosterLimit-mlb.count)),metric('Injured/Coverage',mlb.injured)],'major-section','2026_Roster')}${searchBox}</div><div class="cover-minors-column"><div class="cover-minor-grid">${minorSection('AAA','AAA_Nashville','AAA Roster','Nashville')}${minorSection('A','A_Houston','A Roster','Houston')}${minorSection('AA','AA_Baltimore','AA Roster','Baltimore')}${minorSection('Rookie','RK_Anaheim','Rookie Roster','Anaheim')}</div>${section('Minor League Total','All four minor league levels',[metric('MiLB Cap Limit',MILB_CAP_LIMIT,true),metric('MiLB Current Cap',minorTotal,true),metric('MiLB Balance Available',MILB_CAP_LIMIT-minorTotal,true),metric('MiLB Roster Limit',MINOR_ROSTER_LIMIT*4),metric('MiLB Current Roster',minorCount),metric('MiLB Spots Open',Math.max(0,MINOR_ROSTER_LIMIT*4-minorCount))],'milb-total')}</div><aside class="cover-links-card"><div class="cover-section-head"><div><h3>Links</h3><p>League and player research sites</p></div></div><div class="cover-links-list">${links}</div></aside></div></div>`;
+  const minorPositionTotals={'Infielders':0,'Outfielders':0,'Starting Pitchers':0,'Relief Pitchers':0};
+  for(const cfg of Object.values(MINOR_PAGE_CONFIG)){
+    const counts=minorCounts(cfg.level,cfg.sheet);
+    for(const group of Object.keys(minorPositionTotals))minorPositionTotals[group]+=counts[group]||0;
+  }
+  const minorBreakdown=`<section class="cover-section cover-position-breakdown"><div class="cover-section-head"><div><h3>Minor League Position Breakdown</h3></div></div><div class="cover-metrics">${Object.entries(minorPositionTotals).map(([label,value])=>metric(label,value)).join('')}</div></section>`;
+  return `<div class="cover-page"><div class="cover-title"><p>Major League Roster</p><h2>NEW JERSEY JACKELS</h2></div><div class="cover-dashboard-grid"><div class="cover-main-column">${section('Major League Roster','New Jersey Jackels',[metric('MLB Cap Limit',mlb.limit,true),metric('MLB Current Cap',mlb.used,true),metric('MLB Balance Available',mlb.limit-mlb.used,true),metric('MLB Roster Limit',mlb.rosterLimit),metric('MLB Current Roster',mlb.count),metric('MLB Spots Open',Math.max(0,mlb.rosterLimit-mlb.count)),metric('Injured',mlb.injured),metric('Coverage',mlb.coverage)],'major-section','2026_Roster')}${searchBox}</div><div class="cover-minors-column"><div class="cover-minor-grid">${minorSection('AAA','AAA_Nashville','AAA Roster','Nashville')}${minorSection('A','A_Houston','A Roster','Houston')}${minorSection('AA','AA_Baltimore','AA Roster','Baltimore')}${minorSection('Rookie','RK_Anaheim','Rookie Roster','Anaheim')}</div>${section('Minor League Total','All four minor league levels',[metric('MiLB Cap Limit',MILB_CAP_LIMIT,true),metric('MiLB Current Cap',minorTotal,true),metric('MiLB Balance Available',MILB_CAP_LIMIT-minorTotal,true),metric('MiLB Roster Limit',MINOR_ROSTER_LIMIT*4),metric('MiLB Current Roster',minorCount),metric('MiLB Spots Open',Math.max(0,MINOR_ROSTER_LIMIT*4-minorCount))],'milb-total')}</div><div class="cover-side-column"><aside class="cover-links-card"><div class="cover-section-head"><div><h3>Links</h3><p>League and player research sites</p></div></div><div class="cover-links-list">${links}</div></aside>${minorBreakdown}</div></div></div>`;
 };
 
 const originalOpenAdd=window.openAdd;
