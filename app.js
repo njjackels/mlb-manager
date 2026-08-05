@@ -1,5 +1,5 @@
 
-const APP_VERSION='1.00';
+const APP_VERSION='1.01';
 const D=window.INITIAL_DATA, KEY='kyle-mlb-team-manager-v1';
 const silhouette=`data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 210"><rect width="180" height="210" fill="#e5e8ec"/><circle cx="90" cy="67" r="39" fill="#8e98a5"/><path d="M24 210c3-58 28-91 66-91s63 33 66 91" fill="#8e98a5"/></svg>`)}`;
 let state=JSON.parse(localStorage.getItem(KEY)||'null')||{players:D.players,transactions:[]};
@@ -52,11 +52,13 @@ function eligiblePositions(p){
 function currentPosition(p,fallback=''){
   const eligible=eligiblePositions(p);
   const chosen=String(p?.currentPosition||fallback||'').trim().toUpperCase();
-  return eligible.includes(chosen)?chosen:eligible[0];
+  return eligible.includes(chosen)?chosen:'';
 }
 function positionOptions(p,selected=''){
-  const current=currentPosition(p,selected);
-  return eligiblePositions(p).map(pos=>`<option value="${esc(pos)}"${pos===current?' selected':''}>${esc(pos)}</option>`).join('');
+  const eligible=eligiblePositions(p);
+  const chosen=String(selected||p?.currentPosition||'').trim().toUpperCase();
+  const valid=eligible.includes(chosen)?chosen:'';
+  return `<option value=""${valid?'':' selected'}>Choose position...</option>`+eligible.map(pos=>`<option value="${esc(pos)}"${pos===valid?' selected':''}>${esc(pos)}</option>`).join('');
 }
 const MLB_LINEUP_SLOTS=[
   {id:'C',label:'C',kind:'hit'}, {id:'1B',label:'1B',kind:'hit'}, {id:'2B',label:'2B',kind:'hit'},
@@ -65,7 +67,7 @@ const MLB_LINEUP_SLOTS=[
   {id:'P',label:'P',kind:'p'},
   ...Array.from({length:5},(_,i)=>({id:`SP-${i+1}`,label:'SP',kind:'sp'})),
   ...Array.from({length:7},(_,i)=>({id:`RP-${i+1}`,label:'RP',kind:'rp'})),
-  ...Array.from({length:4},(_,i)=>({id:`BENCH-${i+1}`,label:'BENCH',kind:'bench'}))
+  ...Array.from({length:4},(_,i)=>({id:`BENCH-${i+1}`,label:`BENCH ${i+1}`,kind:'bench'}))
 ];
 function slotDefinition(id){return MLB_LINEUP_SLOTS.find(s=>s.id===id)}
 function firstOpenSlot(kind,players,excludeId=''){
@@ -78,19 +80,48 @@ function preferredSlotKind(position){
   if(position==='RP')return 'rp';
   return 'hit';
 }
+function baseballOnlyPositions(p){
+  return baseballPositions(p).filter(pos=>['C','1B','2B','3B','SS','LF','CF','RF','SP','RP','P'].includes(pos));
+}
+function automaticPositionForPlayer(p){
+  const positions=baseballOnlyPositions(p);
+  return positions.length===1?positions[0]:'';
+}
+function openSlotForPosition(position,players,excludeId=''){
+  const used=new Set(players.filter(x=>x.id!==excludeId).map(x=>x.lineupSlot).filter(Boolean));
+  if(['C','1B','2B','3B','SS','LF','CF','RF','UTL','P'].includes(position))return used.has(position)?'':position;
+  if(position==='SP')return MLB_LINEUP_SLOTS.find(s=>s.kind==='sp'&&!used.has(s.id))?.id||'';
+  if(position==='RP')return MLB_LINEUP_SLOTS.find(s=>s.kind==='rp'&&!used.has(s.id))?.id||'';
+  if(position==='BENCH')return MLB_LINEUP_SLOTS.find(s=>s.kind==='bench'&&!used.has(s.id))?.id||'';
+  return '';
+}
+function assignDefaultMlbSlot(p,players){
+  const auto=automaticPositionForPlayer(p);
+  p.currentPosition=auto;
+  let slot=auto?openSlotForPosition(auto,players,p.id):'';
+  if(auto&&!slot){
+    slot=firstOpenSlot('bench',players,p.id);
+    if(slot)p.currentPosition='BENCH';
+  }
+  p.lineupSlot=slot;
+  return slot;
+}
+
 function initializeMlbLineupSlots(players,slotByName=new Map()){
   let changed=false;const used=new Set();
   for(const p of players){
     if(p.lineupSlot&&slotDefinition(p.lineupSlot)&&!used.has(p.lineupSlot)){used.add(p.lineupSlot);continue}
-    let desired=String(slotByName.get(String(p.name||'').toLowerCase())||currentPosition(p)||'').toUpperCase();
+    const saved=String(slotByName.get(String(p.name||'').toLowerCase())||p.currentPosition||'').toUpperCase();
     let slot='';
-    if(['C','1B','2B','SS','3B','LF','CF','RF','UTL'].includes(desired)&&!used.has(desired))slot=desired;
-    else if(desired==='P'&&!used.has('P'))slot='P';
-    else if(desired==='SP')slot=MLB_LINEUP_SLOTS.find(s=>s.kind==='sp'&&!used.has(s.id))?.id||'';
-    else if(desired==='RP')slot=MLB_LINEUP_SLOTS.find(s=>s.kind==='rp'&&!used.has(s.id))?.id||'';
-    if(!slot)slot=MLB_LINEUP_SLOTS.find(s=>s.kind==='bench'&&!used.has(s.id))?.id||'';
-    if(!slot)slot=MLB_LINEUP_SLOTS.find(s=>!used.has(s.id))?.id||'';
-    p.lineupSlot=slot; if(slot)used.add(slot); changed=true;
+    if(saved)slot=openSlotForPosition(saved,players,p.id);
+    if(!slot&&!saved){
+      const auto=automaticPositionForPlayer(p);
+      if(auto){slot=openSlotForPosition(auto,players,p.id);if(slot)p.currentPosition=auto}
+    }
+    if(!slot&&saved==='BENCH')slot=firstOpenSlot('bench',players,p.id);
+    p.lineupSlot=slot;
+    if(slot)used.add(slot);
+    changed=true;
   }
   if(changed)save();
 }
@@ -140,7 +171,12 @@ function setRosterAssignment(p,value){
     p.active=true;p.roster=value;p.returnRoster=value;p.rosterStatus='ACTIVE';p.status='';
     // Keep the displayed level synchronized with the roster assignment.
     p.currentLevel=value;p.realLevel=value;
-    if(value!=='MLB')p.lineupSlot='';
+    if(value==='MLB'){
+      const mlbPlayers=state.players.filter(x=>x.active!==false&&x.roster==='MLB'&&!isInjuredCoverage(x));
+      assignDefaultMlbSlot(p,mlbPlayers);
+    }else{
+      p.lineupSlot='';
+    }
     setPlayerHighlights(p,playerHighlights(p).filter(x=>x!=='injured'));
   }
   return old;
@@ -190,7 +226,7 @@ function coverPage(){
   const metric=(label,value,isMoney=false)=>`<div class="cover-metric"><span>${esc(label)}</span><strong>${isMoney?money(value):esc(value)}</strong></div>`;
   const section=(title,subtitle,items,cls='')=>`<section class="cover-section ${cls}"><div class="cover-section-head"><div><h3>${esc(title)}</h3>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div></div><div class="cover-metrics">${items.join('')}</div></section>`;
   const links=Object.entries(coverLinks).map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
-  const search=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><input id="coverPlayerSearch" class="cover-player-search" list="coverPlayerList" placeholder="Enter player name"><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button><datalist id="coverPlayerList">${state.players.filter(p=>p.active!==false).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></div></section>`;
+  const search=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><div class="cover-search-autocomplete"><input id="coverPlayerSearch" class="cover-player-search" autocomplete="off" placeholder="Enter player name"><div id="coverPlayerSuggestions" class="cover-player-suggestions" hidden></div></div><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button></div></section>`;
   return `<div class="cover-page">
     <div class="cover-title"><p>Major League Roster</p><h2>${esc(val(1,1)||'NEW JERSEY JACKELS')}</h2></div>
     <div class="cover-dashboard-grid">
@@ -230,6 +266,21 @@ function coverPage(){
   </div>`
 }
 
+function mlbRosterWarnings(activePlayers,rosterLimit=26){
+  const warnings=[];
+  if(activePlayers.length>rosterLimit)warnings.push(`${activePlayers.length-rosterLimit} player${activePlayers.length-rosterLimit===1?' is':'s are'} over the ${rosterLimit}-player limit.`);
+  const missing=activePlayers.filter(p=>!p.currentPosition||!p.lineupSlot);
+  if(missing.length)warnings.push(`${missing.length} MLB player${missing.length===1?' needs':'s need'} a Current Position: ${missing.map(p=>p.name).join(', ')}.`);
+  const grouped=new Map();
+  activePlayers.forEach(p=>{if(!p.lineupSlot)return;const a=grouped.get(p.lineupSlot)||[];a.push(p.name);grouped.set(p.lineupSlot,a)});
+  const duplicates=[...grouped.entries()].filter(([,names])=>names.length>1);
+  if(duplicates.length)warnings.push(`Duplicate roster slots: ${duplicates.map(([slot,names])=>`${slot} (${names.join(', ')})`).join('; ')}.`);
+  return warnings;
+}
+function rosterWarningsHtml(warnings){
+  return warnings.length?`<div class="roster-warning-box"><strong>Roster Check</strong>${warnings.map(w=>`<div>${esc(w)}</div>`).join('')}</div>`:'';
+}
+
 function mlbRosterPage(){
   const source=D.sheets['2026_Roster']||[];
   const slotByName=new Map();
@@ -244,7 +295,14 @@ function mlbRosterPage(){
   initializeMlbLineupSlots(activeAll,slotByName);
   const visible=p=>!q||[p.name,p.positions,p.mlbTeam,p.notes,p.contractType,p.roster].join(' ').toLowerCase().includes(q);
   const active=activeAll.filter(visible), injured=allMlb.filter(p=>assignmentStatus(p)==='INJ').filter(visible), coverage=allMlb.filter(p=>assignmentStatus(p)==='CVG').filter(visible);
-  const bySlot=new Map(active.map(p=>[p.lineupSlot,p]));
+  const bySlot=new Map();
+  for(const p of active){
+    if(slotDefinition(p.lineupSlot)&&!bySlot.has(p.lineupSlot))bySlot.set(p.lineupSlot,p);
+  }
+  // Show every active MLB player. Players with blank, invalid, or duplicate slots
+  // appear below the fixed roster instead of disappearing.
+  const displayedIds=new Set([...bySlot.values()].map(p=>p.id));
+  const unassigned=active.filter(p=>!displayedIds.has(p.id));
   const playerCells=p=>`<td><button class="photo-button" onclick="openPlayerDetails('${p.id}')" title="View ${esc(p.name)}"><img class="roster-photo" src="${photo(p)}" onerror="this.onerror=null;this.src=window.silhouette" alt="${esc(p.name)}"></button></td><td><div class="player-cell">${p.url?`<a class="player-name-link" target="_blank" rel="noopener" href="${esc(p.url)}" title="Open Baseball Savant">${esc(p.name)}</a>`:`<span class="player-name-link">${esc(p.name)}</span>`}${highlightBadges(p)}<button class="details-link" onclick="openPlayerDetails('${p.id}')">View details</button></div></td><td><select class="position-select" aria-label="Current position for ${esc(p.name)}" onchange="changePlayerPosition('${p.id}',this.value)">${positionOptions(p,currentPosition(p))}</select></td><td>${esc(p.age)}</td><td>${esc(p.positions)}</td><td>${esc(p.mlbTeam)}</td><td>${esc(p.currentLevel||p.realLevel||'')}</td><td class="currency-cell">${money(p.mlbSalary)}</td><td>${esc(p.finalYear)}</td><td>${esc(p.options)}</td><td>${esc(p.contractType)}</td><td class="notes-cell">${esc(p.notes)}</td><td class="row-actions"><button class="mini" onclick="openPlayerDetails('${p.id}')">View</button><button class="mini" onclick="editPlayer('${p.id}')">Edit</button><button class="mini danger" onclick="releasePlayer('${p.id}')">Release</button></td>`;
   const renderSlotRow=slot=>{
     const p=bySlot.get(slot.id);
@@ -257,6 +315,7 @@ function mlbRosterPage(){
   const sectionRows=(title,slots)=>`<tr class="section-row"><td colspan="14">${title}</td></tr>${slots.map(renderSlotRow).join('')}`;
   const slotRows=sectionRows('Hitters',hitterSlots)+sectionRows('Pitchers',pitcherSlots)+sectionRows('Bench',benchSlots);
   const statusRows=players=>players.map(p=>`<tr class="${highlightRowClass(p)}"><td class="fixed-slot">${assignmentStatus(p)}</td>${playerCells(p)}</tr>`).join('');
+  const unassignedRows=unassigned.map(p=>`<tr class="${highlightRowClass(p)}"><td class="fixed-slot">UNASSIGNED</td>${playerCells(p)}</tr>`).join('');
   const injuredRows=statusRows(injured),coverageRows=statusRows(coverage);
   const val=(r,c)=>source[r]?.[c]??'';
   // Cap includes every MLB-assigned player plus every injured/coverage player,
@@ -267,7 +326,10 @@ function mlbRosterPage(){
   const activeCount=activeAll.length;
   const freeSpace=(Number(D.cap)||Number(val(6,22))||0)-capUsed;
   const side=`<aside class="roster-info-sidebar"><section class="roster-info-card"><h3>Roster Information</h3><div class="info-line"><span>Cap</span><strong>${money(capUsed)} of ${money(D.cap||val(6,22))}</strong></div><div class="info-line"><span>Free Space</span><strong>${money(freeSpace)}</strong></div><div class="info-line"><span>Players</span><strong>${activeCount} of ${rosterLimit}</strong></div></section></aside>`;
-  return `<div class="roster-web-page">${toolbar()}<div class="roster-page-head"><div><h2>Major League Roster</h2><p>New Jersey Jackels</p></div><strong>${allMlb.length} listed players</strong></div><div class="roster-layout"><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Slot</th><th>Photo</th><th>Player</th><th>Position</th><th>Age</th><th>Eligible Positions</th><th>Team</th><th>Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${slotRows}${injuredRows?`<tr class="section-row injury-section-row"><td colspan="14">Injured (${injured.length})</td></tr>${injuredRows}`:''}${coverageRows?`<tr class="section-row coverage-section-row"><td colspan="14">Coverage (${coverage.length})</td></tr>${coverageRows}`:''}</tbody></table></div>${side}</div></div>`;
+  const warnings=activeMinorAt(cfg.level).length>MINOR_ROSTER_LIMIT
+    ?[`${activeMinorAt(cfg.level).length-MINOR_ROSTER_LIMIT} player${activeMinorAt(cfg.level).length-MINOR_ROSTER_LIMIT===1?' is':'s are'} over the ${MINOR_ROSTER_LIMIT}-player limit.`]
+    :[];
+  return `<div class="roster-web-page">${toolbar()}${rosterWarningsHtml(warnings)}<div class="roster-page-head"><div><h2>Major League Roster</h2><p>New Jersey Jackels</p></div><strong>${allMlb.length} listed players</strong></div><div class="roster-layout"><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Slot</th><th>Photo</th><th>Player</th><th>Position</th><th>Age</th><th>Eligible Positions</th><th>Team</th><th>Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${slotRows}${unassignedRows?`<tr class="section-row"><td colspan="14">Unassigned MLB Players (${unassigned.length})</td></tr>${unassignedRows}`:''}${injuredRows?`<tr class="section-row injury-section-row"><td colspan="14">Injured (${injured.length})</td></tr>${injuredRows}`:''}${coverageRows?`<tr class="section-row coverage-section-row"><td colspan="14">Coverage (${coverage.length})</td></tr>${coverageRows}`:''}</tbody></table></div>${side}</div></div>`;
 }
 
 function minorRosterPage(sheetName,level){
@@ -280,12 +342,30 @@ function minorRosterPage(sheetName,level){
     return (ai<0?999:ai)-(bi<0?999:bi)||a.name.localeCompare(b.name);
   });
   const row=p=>`<tr class="${highlightRowClass(p)}"><td><select class="position-select" aria-label="Current position for ${esc(p.name)}" onchange="changePlayerPosition('${p.id}',this.value)">${positionOptions(p)}</select></td><td><button class="photo-button" onclick="openPlayerDetails('${p.id}')"><img class="roster-photo" src="${photo(p)}" onerror="this.onerror=null;this.src=window.silhouette" alt="${esc(p.name)}"></button></td><td><div class="player-cell"><span class="player-name-link">${esc(p.name)}</span>${highlightBadges(p)}<button class="details-link" onclick="openPlayerDetails('${p.id}')">View details</button></div></td><td>${esc(p.age)}</td><td>${esc(p.positions)}</td><td>${esc(p.mlbTeam)}</td><td>${esc(p.currentLevel||p.realLevel||'')}</td><td class="currency-cell">${money(p.minorSalary)}</td><td>${esc(p.finalYear)}</td><td>${esc(p.options)}</td><td>${esc(p.contractType)}</td><td class="notes-cell">${esc(p.notes)}</td><td class="row-actions"><button class="mini" onclick="openPlayerDetails('${p.id}')">View</button><button class="mini" onclick="editPlayer('${p.id}')">Edit</button><button class="mini danger" onclick="releasePlayer('${p.id}')">Release</button></td></tr>`;
-  return `<div class="roster-web-page">${toolbar()}<div class="roster-page-head"><div><h2>${esc(level)} Roster</h2><p>Change a player’s assigned position using the first column.</p></div><strong>${ps.length} players</strong></div><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Current Position</th><th>Photo</th><th>Player</th><th>Age</th><th>Eligible Positions</th><th>Team</th><th>Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${ps.map(row).join('')||'<tr><td colspan="13" class="empty">No matching players.</td></tr>'}</tbody></table></div></div>`;
+  const warnings=mlbRosterWarnings(activeAll,rosterLimit);
+  return `<div class="roster-web-page">${toolbar()}${rosterWarningsHtml(warnings)}<div class="roster-page-head"><div><h2>${esc(level)} Roster</h2><p>Change a player’s assigned position using the first column.</p></div><strong>${ps.length} players</strong></div><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Current Position</th><th>Photo</th><th>Player</th><th>Age</th><th>Eligible Positions</th><th>Team</th><th>Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${ps.map(row).join('')||'<tr><td colspan="13" class="empty">No matching players.</td></tr>'}</tbody></table></div></div>`;
 }
 
 function sheetPage(name){if(name==='Cover')return coverPage();if(name==='2026_Roster')return mlbRosterPage();if(name==='AAA_Nashville')return minorRosterPage(name,'AAA');if(name==='AA_Baltimore')return minorRosterPage(name,'AA');if(name==='A_Houston')return minorRosterPage(name,'A');if(name==='RK_Anaheim')return minorRosterPage(name,'Rookie');let m=D.sheets[name]||[];let rows=m.map((r,i)=>`<tr>${r.map(v=>{let hit=targetPlayer&&String(v).trim().toLowerCase()===targetPlayer.toLowerCase();return `<${i===0?'th':'td'} class="${hit?'player-hit':''}">${esc(v)}</${i===0?'th':'td'}>`}).join('')}</tr>`).join('');return `<h2>${name.replaceAll('_',' ')}</h2><div class="panel tablewrap"><table class="sheet-table">${rows}</table></div>`}
 function transactions(){return `${toolbar()}<h2>Transactions</h2><div class="panel">${state.transactions.slice().reverse().map(t=>`<div class="transaction"><b>${t.type}</b> · ${t.player||''}<br><span>${t.details||''}</span><br><small>${new Date(t.date).toLocaleString()}</small></div>`).join('')||'<div class="empty">No transactions recorded.</div>'}</div>`}
-function render(){if(current==='Partial Contract Coverage')current='Cover';nav();let out=sheetPage(current);$('#main').innerHTML=out;window.silhouette=silhouette;let s=$('#search');if(s)s.oninput=e=>{search=e.target.value;render()};let cps=$('#coverPlayerSearch');if(cps)cps.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();findPlayerFromCover()}};if(targetPlayer){let hit=document.querySelector('.player-hit');if(hit){setTimeout(()=>hit.scrollIntoView({behavior:'smooth',block:'center'}),50)}targetPlayer=''}}
+function setupCoverPlayerSearch(){
+  const input=$('#coverPlayerSearch'),box=$('#coverPlayerSuggestions');
+  if(!input||!box)return;
+  const players=state.players.filter(p=>p.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
+  const draw=()=>{
+    const q=input.value.trim().toLowerCase();
+    if(!q){box.hidden=true;box.innerHTML='';return}
+    const matches=players.filter(p=>p.name.toLowerCase().includes(q)).slice(0,8);
+    box.innerHTML=matches.map(p=>`<button type="button" class="cover-player-suggestion" data-name="${esc(p.name)}"><span>${esc(p.name)}</span><small>${esc(p.roster||'Player Key')}</small></button>`).join('');
+    box.hidden=!matches.length;
+    box.querySelectorAll('.cover-player-suggestion').forEach(btn=>btn.onclick=()=>{input.value=btn.dataset.name||'';box.hidden=true;findPlayerFromCover()});
+  };
+  input.oninput=draw;
+  input.onfocus=draw;
+  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();box.hidden=true;findPlayerFromCover()}else if(e.key==='Escape')box.hidden=true};
+  input.onblur=()=>setTimeout(()=>{box.hidden=true},150);
+}
+function render(){if(current==='Partial Contract Coverage')current='Cover';nav();let out=sheetPage(current);$('#main').innerHTML=out;window.silhouette=silhouette;let s=$('#search');if(s)s.oninput=e=>{search=e.target.value;render()};setupCoverPlayerSearch();if(targetPlayer){let hit=document.querySelector('.player-hit');if(hit){setTimeout(()=>hit.scrollIntoView({behavior:'smooth',block:'center'}),50)}targetPlayer=''}}
 function log(type,p,details=''){state.transactions.push({type,player:p?.name||'',details,date:new Date().toISOString()});save()}
 window.movePlayer=(id,level)=>{let p=state.players.find(x=>x.id===id);if(!p)return;const old=setRosterAssignment(p,level);log(level==='MLB'?'Promoted':'Roster Assignment Changed',p,`${old} to ${assignmentLabel(p)}`);save();render()}
 window.releasePlayer=id=>{let p=state.players.find(x=>x.id===id);if(p&&confirm(`Release ${p.name}?`)){p.active=false;log('Released',p,`Released from ${p.roster}`);save();render()}}
@@ -367,10 +447,13 @@ window.editPlayer=id=>{let p=state.players.find(x=>x.id===id);openPlayerDialog(p
 window.openAdd=()=>openPlayerDialog(null)
 function refreshPositionSelect(f,p){
   const select=f.elements.currentPosition;if(!select)return;
-  const temp={positions:f.elements.positions?.value||p?.positions||'',currentPosition:p?.currentPosition||''};
-  select.innerHTML=positionOptions(temp,p?.currentPosition||'');
+  const selected=select.value||p?.currentPosition||'';
+  const temp={positions:f.elements.positions?.value||p?.positions||'',currentPosition:selected};
+  select.innerHTML=positionOptions(temp,selected);
+  select.disabled=!String(temp.positions||'').trim();
 }
-function openPlayerDialog(p){let d=$('#playerDialog'),f=$('#playerForm');f.reset();f.dataset.id=p?.id||'';for(let k of ['name','age','positions','mlbTeam','roster','mlbSalary','minorSalary','finalYear','options','contractType','notes','mlbId','url'])if(f.elements[k])f.elements[k].value=p?.[k]??'';refreshPositionSelect(f,p);if(f.elements.positions)f.elements.positions.oninput=()=>refreshPositionSelect(f,{...p,currentPosition:f.elements.currentPosition?.value||p?.currentPosition});$('#playerTitle').textContent=p?'Edit Player':'Add Player';d.showModal()}
+function openPlayerDialog(p){let d=$('#playerDialog'),f=$('#playerForm');f.reset();f.dataset.id=p?.id||'';for(let k of ['name','age','positions','mlbTeam','roster','mlbSalary','minorSalary','finalYear','options','contractType','notes','mlbId','url'])if(f.elements[k])f.elements[k].value=p?.[k]??'';refreshPositionSelect(f,p);
+  const posHelp=$('#currentPositionHelp');if(posHelp){const count=baseballOnlyPositions(p||{positions:f.elements.positions?.value||''}).length;posHelp.textContent=count>1?'Multiple eligible positions. Choose the exact MLB position or Bench.':'Choose the current MLB position. Single-position players may be assigned automatically when promoted.';}if(f.elements.positions)f.elements.positions.oninput=()=>refreshPositionSelect(f,{...p,currentPosition:f.elements.currentPosition?.value||p?.currentPosition});$('#playerTitle').textContent=p?'Edit Player':'Add Player';d.showModal()}
 $('#playerForm').onsubmit=e=>{e.preventDefault();let f=e.target,fd=Object.fromEntries(new FormData(f));let p=state.players.find(x=>x.id===f.dataset.id);if(!p){p={id:fd.mlbId||('custom-'+Date.now()),active:true,status:'',realLevel:'',fortyMan:'',rank:'',source:''};state.players.push(p)}Object.assign(p,fd,{mlbSalary:parseSalary(fd.mlbSalary),minorSalary:parseSalary(fd.minorSalary)});log(f.dataset.id?'Contract Edited':'Added',p);save();$('#playerDialog').close();render()}
 window.openTrade=()=>{$('#tradeForm').reset();$('#tradeDialog').showModal()}
 $('#tradeForm').onsubmit=e=>{e.preventDefault();let fd=Object.fromEntries(new FormData(e.target));state.transactions.push({type:'Trade',player:fd.player,details:`${fd.direction}: ${fd.details}`,date:new Date().toISOString()});save();$('#tradeDialog').close();render()}
@@ -416,10 +499,37 @@ function populateDatabaseForm(p){
   if(f.elements.highlightTop100)f.elements.highlightTop100.checked=h.includes('top-100');
   if(f.elements.highlightTeamTop10)f.elements.highlightTeamTop10.checked=h.includes('team-top-10');
   if(f.elements.highlight40Man)f.elements.highlight40Man.checked=h.includes('40-man');
+  refreshPositionSelect(f,p);
+  if(f.elements.positions)f.elements.positions.oninput=()=>refreshPositionSelect(f,{...p,currentPosition:f.elements.currentPosition?.value||''});
 }
+window.quickRosterAssignment=value=>{
+  const f=$('#playerForm');if(!f)return;
+  f.elements.roster.value=value;
+  const note=$('#quickRosterNote');
+  if(note)note.textContent=value==='MLB'?'MLB selected. Choose Current Position for multi-position players.':`${value} selected.`;
+};
 window.editDatabasePlayer=id=>{const p=state.players.find(x=>x.id===id);if(!p)return;populateDatabaseForm(p);$('#playerTitle').textContent='Edit Player Key';$('#playerDialog').showModal()};
 window.editPlayer=window.editDatabasePlayer;
 window.newDatabasePlayer=()=>{populateDatabaseForm(null);$('#playerTitle').textContent='Add to Player Key';$('#playerDialog').showModal()};
+
+function assignMlbPositionFromPlayerKey(p,position){
+  position=String(position||'').trim().toUpperCase();
+  if(!position||p.roster!=='MLB'||isInjuredCoverage(p))return true;
+  const allowed=eligiblePositions(p);
+  if(!allowed.includes(position))return false;
+  const players=state.players.filter(x=>x.active!==false&&x.roster==='MLB'&&!isInjuredCoverage(x));
+  initializeMlbLineupSlots(players);
+  p.currentPosition=position;
+  let target='';
+  if(['C','1B','2B','SS','3B','LF','CF','RF','UTL'].includes(position))target=position;
+  else if(position==='P')target='P';
+  else if(position==='SP')target=firstOpenSlot('sp',players,p.id)||'';
+  else if(position==='RP')target=firstOpenSlot('rp',players,p.id)||'';
+  else if(position==='BENCH')target=firstOpenSlot('bench',players,p.id)||'';
+  if(!target){alert(`There is no open ${position} roster spot.`);return false}
+  movePlayerToLineupSlot(p,target,players);
+  return true;
+}
 
 $('#playerForm').onsubmit=e=>{
   e.preventDefault();
@@ -434,11 +544,14 @@ $('#playerForm').onsubmit=e=>{
   }
   const oldId=p.id;
   const rosterChoice=fd.roster||assignmentValue(p);
+  const selectedPosition=String(fd.currentPosition||'').trim().toUpperCase();
   delete fd.roster;
+  delete fd.currentPosition;
   const mlbSalary=parseSalary(fd.mlbSalary),minorSalary=parseSalary(fd.minorSalary);
   if(Number.isNaN(mlbSalary)||Number.isNaN(minorSalary)){alert('Enter a valid salary, such as 3250000 or $3,250,000.');return}
   Object.assign(p,fd,{mlbSalary,minorSalary});
   setRosterAssignment(p,rosterChoice);
+  if(selectedPosition&&!assignMlbPositionFromPlayerKey(p,selectedPosition))return;
   const chosenHighlights=[fd.highlightInjured?'injured':'',fd.highlightMlbLevel?'mlb-level':'',fd.highlightTop100?'top-100':'',fd.highlightTeamTop10?'team-top-10':'',fd.highlight40Man?'40-man':''].filter(Boolean);
   if(assignmentStatus(p)==='INJ'&&!chosenHighlights.includes('injured'))chosenHighlights.push('injured');
   setPlayerHighlights(p,chosenHighlights);
@@ -574,6 +687,10 @@ function mlbSlotMap(){
   return map;
 }
 function isMlbInjuredCoverage(p){
+  // Once a player has an explicit saved roster status, that saved status is
+  // the source of truth. Do not let the original workbook's old INJ/CVG row
+  // override a later move made from the Player Key.
+  if(Object.prototype.hasOwnProperty.call(p,'rosterStatus'))return isInjuredCoverage(p);
   if(isInjuredCoverage(p))return true;
   const slot=mlbSlotMap().get(String(p.name||'').toLowerCase())||'';
   return ['INJ','CVG'].includes(slot)||/\b(?:INJ|IL|COVERAGE|CVG)\b/i.test(String(p.notes||''));
@@ -615,7 +732,8 @@ function minorRosterPage(pageName){
   const coverageSection=coverage.length?`<tr class="section-row coverage-section-row"><td colspan="13">Coverage (${coverage.length})</td></tr>${coverage.map(p=>minorRosterRow(p,'CVG')).join('')}`:'';
   const body=activeSections+injuredSection+coverageSection;
   const side=`<aside class="roster-info-sidebar"><section class="roster-info-card"><h3>Roster Information</h3><div class="info-line"><span>Salary Total</span><strong>${money(salaryTotal)}</strong></div><div class="info-line"><span>Active Players</span><strong>${activeMinorAt(cfg.level).length} of ${MINOR_ROSTER_LIMIT}</strong></div><div class="info-line"><span>Injured</span><strong>${injured.length}</strong></div><div class="info-line"><span>Coverage</span><strong>${coverage.length}</strong></div><div class="info-line"><span>Spots Open</span><strong>${spots}</strong></div></section><section class="roster-info-card"><h3>Position Breakdown</h3>${groups.map(g=>`<div class="info-line"><span>${g}</span><strong>${counts[g]}</strong></div>`).join('')}</section></aside>`;
-  return `<div class="roster-web-page">${toolbar()}<div class="roster-page-head"><div><h2>${cfg.title}</h2><p>${cfg.team}. Use the Group dropdown to move a player between position sections.</p></div><strong>${activeMinorAt(cfg.level).length} active · ${injured.length} INJ · ${coverage.length} CVG</strong></div><div class="roster-layout"><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Group</th><th>Photo</th><th>Player</th><th>Age</th><th>Position</th><th>Team</th><th>MLB Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${body||'<tr><td colspan="13" class="empty">No players on this roster.</td></tr>'}</tbody></table></div>${side}</div></div>`;
+  const warnings=mlbRosterWarnings(activeAll,rosterLimit);
+  return `<div class="roster-web-page">${toolbar()}${rosterWarningsHtml(warnings)}<div class="roster-page-head"><div><h2>${cfg.title}</h2><p>${cfg.team}. Use the Group dropdown to move a player between position sections.</p></div><strong>${activeMinorAt(cfg.level).length} active · ${injured.length} INJ · ${coverage.length} CVG</strong></div><div class="roster-layout"><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Group</th><th>Photo</th><th>Player</th><th>Age</th><th>Position</th><th>Team</th><th>MLB Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${body||'<tr><td colspan="13" class="empty">No players on this roster.</td></tr>'}</tbody></table></div>${side}</div></div>`;
 }
 
 function topRankedProspectsPage(){
@@ -626,7 +744,8 @@ function topRankedProspectsPage(){
     .filter(p=>!q||[p.name,p.positions,p.mlbTeam,p.notes,p.contractType,p.roster,p.currentLevel,p.realLevel,assignmentLabel(p)].join(' ').toLowerCase().includes(q))
     .sort((a,b)=>(rosterOrder[a.roster]??99)-(rosterOrder[b.roster]??99)||a.name.localeCompare(b.name));
   const row=p=>`<tr class="${highlightRowClass(p)}"><td>${esc(assignmentLabel(p))}</td><td><button class="photo-button" onclick="openPlayerDetails('${p.id}')" title="View ${esc(p.name)}"><img class="roster-photo" src="${photo(p)}" onerror="this.onerror=null;this.src=window.silhouette" alt="${esc(p.name)}"></button></td><td><div class="player-cell">${p.url?`<a class="player-name-link" target="_blank" rel="noopener" href="${esc(p.url)}" title="Open Baseball Savant">${esc(p.name)}</a>`:`<span class="player-name-link">${esc(p.name)}</span>`}${highlightBadges(p)}<button class="details-link" onclick="openPlayerDetails('${p.id}')">View details</button></div></td><td>${esc(p.age)}</td><td>${esc(p.positions)}</td><td>${esc(p.mlbTeam)}</td><td>${esc(p.currentLevel||p.realLevel||p.roster||'')}</td><td class="currency-cell">${money(salary(p))}</td><td>${esc(p.finalYear)}</td><td>${esc(p.options)}</td><td>${esc(p.contractType)}</td><td class="notes-cell">${esc(p.notes)}</td><td class="row-actions"><button class="mini" onclick="openPlayerDetails('${p.id}')">View</button><button class="mini" onclick="editPlayer('${p.id}')">Edit</button></td></tr>`;
-  return `<div class="roster-web-page">${toolbar()}<div class="roster-page-head"><div><h2>Top Ranked Prospects</h2><p>Players marked Top 100 across all five roster pages.</p></div><strong>${prospects.length} prospects</strong></div><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Roster</th><th>Photo</th><th>Player</th><th>Age</th><th>Position</th><th>Team</th><th>MLB Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${prospects.map(row).join('')||'<tr><td colspan="13" class="empty">No players are marked Top 100.</td></tr>'}</tbody></table></div></div>`;
+  const warnings=mlbRosterWarnings(activeAll,rosterLimit);
+  return `<div class="roster-web-page">${toolbar()}${rosterWarningsHtml(warnings)}<div class="roster-page-head"><div><h2>Top Ranked Prospects</h2><p>Players marked Top 100 across all five roster pages.</p></div><strong>${prospects.length} prospects</strong></div><div class="roster-table-panel"><table class="roster-web-table"><thead><tr><th>Roster</th><th>Photo</th><th>Player</th><th>Age</th><th>Position</th><th>Team</th><th>MLB Level</th><th>Contract</th><th>Final Year</th><th>Options</th><th>Contract Type</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${prospects.map(row).join('')||'<tr><td colspan="13" class="empty">No players are marked Top 100.</td></tr>'}</tbody></table></div></div>`;
 }
 
 const sheetPageWithDatabase=sheetPage;
@@ -647,7 +766,7 @@ coverPage=function(){
   const metric=(label,value,isMoney=false)=>`<div class="cover-metric"><span>${esc(label)}</span><strong>${isMoney?money(value):esc(value)}</strong></div>`;
   const section=(title,subtitle,items,cls='',page='')=>`<section class="cover-section ${cls} ${page?'clickable-cover-section':''}" ${page?`onclick="goToPage('${page}')" title="Open ${esc(title)}"`:''}><div class="cover-section-head"><div><h3>${esc(title)}</h3>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div>${page?'<b class="cover-open-label">Open</b>':''}</div><div class="cover-metrics">${items.join('')}</div></section>`;
   const links=Object.entries(coverLinks).map(([name,url])=>`<a class="cover-site-link" target="_blank" rel="noopener" href="${url}"><span>${esc(name)}</span><b>Open</b></a>`).join('');
-  const searchBox=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><input id="coverPlayerSearch" class="cover-player-search" list="coverPlayerList" placeholder="Enter player name"><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button><datalist id="coverPlayerList">${state.players.filter(p=>p.active!==false).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></div></section>`;
+  const searchBox=`<section class="cover-search-card"><div><h3>Player Search</h3><p>Find a player on any roster page.</p></div><div class="cover-search-wrap"><div class="cover-search-autocomplete"><input id="coverPlayerSearch" class="cover-player-search" autocomplete="off" placeholder="Enter player name"><div id="coverPlayerSuggestions" class="cover-player-suggestions" hidden></div></div><button class="btn primary" onclick="findPlayerFromCover()">Search Player</button></div></section>`;
   const minorSection=(level,page,title,team)=>section(title,team,[metric(`${level} Salary Total`,minorSalaryTotal(level),true),metric(`${level} Roster Limit`,MINOR_ROSTER_LIMIT),metric(`${level} Current Roster`,activeMinorAt(level).length),metric(`${level} Injured/Coverage`,activeAt(level).filter(isInjuredCoverage).length),metric(`${level} Spots Open`,Math.max(0,MINOR_ROSTER_LIMIT-activeMinorAt(level).length))],'',page);
   const minorPositionTotals={'Infielders':0,'Outfielders':0,'Starting Pitchers':0,'Relief Pitchers':0};
   for(const cfg of Object.values(MINOR_PAGE_CONFIG)){
@@ -661,6 +780,10 @@ coverPage=function(){
 const originalOpenAdd=window.openAdd;
 window.openAdd=()=>{originalOpenAdd();const f=$('#rosterAddForm');if(!f)return;const map={'2026_Roster':'MLB','AAA_Nashville':'AAA','AA_Baltimore':'AA','A_Houston':'A','RK_Anaheim':'Rookie'};if(map[current])f.elements.roster.value=map[current]};
 window.goToPage=goToPage;
+// Repair any existing active MLB records that were saved without a lineup slot.
+// This includes players moved to MLB before this fix was installed.
+const repairMlbPlayers=state.players.filter(p=>p.active!==false&&p.roster==='MLB'&&!isInjuredCoverage(p));
+initializeMlbLineupSlots(repairMlbPlayers);
 initializeMinorRosters();
 render();
 /* Live Field Map */
